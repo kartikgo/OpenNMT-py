@@ -30,6 +30,7 @@ def main(opt):
               see world_size and gpu_ranks")
 
     nb_gpu = len(opt.gpu_ranks)
+    #print nb_gpu, opt.gpu_ranks[0]
 
     if opt.world_size > 1:
         mp = torch.multiprocessing.get_context('spawn')
