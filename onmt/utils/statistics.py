@@ -19,8 +19,10 @@ class Statistics(object):
     * elapsed time
     """
 
-    def __init__(self, loss=0, n_words=0, n_correct=0):
+    def __init__(self, loss=0, n_words=0, n_correct=0, logZ=0.0, log2Z=0.0):
         self.loss = loss
+        self.logZ=logZ
+        self.log2Z=log2Z
         self.n_words = n_words
         self.n_correct = n_correct
         self.n_src_words = 0
@@ -80,7 +82,8 @@ class Statistics(object):
         self.loss += stat.loss
         self.n_words += stat.n_words
         self.n_correct += stat.n_correct
-
+        self.logZ += stat.logZ
+        self.log2Z += stat.log2Z
         if update_n_src_words:
             self.n_src_words += stat.n_src_words
 
@@ -96,6 +99,12 @@ class Statistics(object):
         """ compute perplexity """
         return math.exp(min(self.loss / self.n_words, 100))
 
+    def get_logZ(self):
+        return self.logZ/self.n_words
+
+    def get_logZvar(self):
+        return (self.log2Z/self.n_words - (math.pow(self.logZ/self.n_words,2)))
+
     def elapsed_time(self):
         """ compute elapsed time """
         return time.time() - self.start_time
@@ -110,11 +119,12 @@ class Statistics(object):
         """
         t = self.elapsed_time()
         logger.info(
-            ("Step %2d/%5d; acc: %6.2f; ppl: %5.2f; xent: %4.2f; " +
+            ("Step %2d/%5d; acc: %6.2f; ppl: %5.2f; logZ:%6.2f; xent: %4.2f; " +
              "lr: %7.5f; %3.0f/%3.0f tok/s; %6.0f sec")
             % (step, num_steps,
                self.accuracy(),
                self.ppl(),
+               self.get_logZ(),
                self.xent(),
                learning_rate,
                self.n_src_words / (t + 1e-5),
@@ -127,6 +137,7 @@ class Statistics(object):
         t = self.elapsed_time()
         writer.add_scalar(prefix + "/xent", self.xent(), step)
         writer.add_scalar(prefix + "/ppl", self.ppl(), step)
+        writer.add_scalar(prefix + "/logZ", self.get_logZ(), step)
         writer.add_scalar(prefix + "/accuracy", self.accuracy(), step)
         writer.add_scalar(prefix + "/tgtper", self.n_words / t, step)
         writer.add_scalar(prefix + "/lr", learning_rate, step)

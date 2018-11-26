@@ -2,6 +2,18 @@
 import torch.nn as nn
 
 
+class LMModel(nn.Module):
+    def __init__(self,decoder):
+        super(LMModel,self).__init__()
+        self.decoder = decoder
+    def forward(self,tgt, dec_state=None):
+        tgt =tgt[:-1]
+        context=None
+        context_lengths=None
+        bsize = tgt.size(1)
+        dec_out,attns = self.decoder(tgt, context, context_lengths, lm=True)
+        return dec_out,attns
+        
 class NMTModel(nn.Module):
     """
     Core trainable object in OpenNMT. Implements a trainable interface

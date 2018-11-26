@@ -110,6 +110,8 @@ def model_opts(parser):
     group.add('--bridge', '-bridge', action="store_true",
               help="""Have an additional layer between the last encoder
                        state and the first decoder state""")
+    group.add('--lm', '-lm', action="store_true",
+              help="""Make an lm instead of NMT""")
     group.add('--rnn_type', '-rnn_type', type=str, default='LSTM',
               choices=['LSTM', 'GRU', 'SRU'],
               action=CheckSRU,
@@ -310,10 +312,11 @@ def train_opts(parser):
     group.add('--seed', '-seed', type=int, default=-1,
               help="""Random seed used for the experiments
                        reproducibility.""")
-
+    group.add('--snorm', '-snorm', type=float, default=0.0,
+              help="""self normalization regularizer""")
     # Init options
     group = parser.add_argument_group('Initialization')
-    group.add('--param_init', '-param_init', type=float, default=0.1,
+    group.add('--param_init', '-param_init', type=float, default=0.01,
               help="""Parameters are initialized over uniform distribution
                        with support (-param_init, param_init).
                        Use 0 to not use initialization""")

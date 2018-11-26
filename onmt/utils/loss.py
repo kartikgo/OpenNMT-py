@@ -29,7 +29,7 @@ def build_loss_compute(model, tgt_vocab, opt, train=True):
     else:
         compute = NMTLossCompute(
             model.generator, tgt_vocab,
-            label_smoothing=opt.label_smoothing if train else 0.0)
+            label_smoothing=opt.label_smoothing if train else 0.0, self_norm= opt.snorm)
     compute.to(device)
 
     return compute
@@ -147,7 +147,7 @@ class LossComputeBase(nn.Module):
             batch_stats.update(stats)
         return batch_stats
 
-    def _stats(self, loss, scores, target):
+    def _stats(self, loss, scores, target, logZ=0.0, logZsq=0.0):
         """
         Args:
             loss (:obj:`FloatTensor`): the loss computed by the loss criterion.
@@ -164,7 +164,7 @@ class LossComputeBase(nn.Module):
                           .sum() \
                           .item()
         num_non_padding = non_padding.sum().item()
-        return onmt.utils.Statistics(loss.item(), num_non_padding, num_correct)
+        return onmt.utils.Statistics(loss.item(), num_non_padding, num_correct, logZ, logZsq)
 
     def _bottle(self, _v):
         return _v.view(-1, _v.size(2))
@@ -209,7 +209,7 @@ class NMTLossCompute(LossComputeBase):
     """
 
     def __init__(self, generator, tgt_vocab, normalization="sents",
-                 label_smoothing=0.0):
+                 label_smoothing=0.0, self_norm=0.0):
         super(NMTLossCompute, self).__init__(generator, tgt_vocab)
         self.sparse = not isinstance(generator[1], nn.LogSoftmax)
         if label_smoothing > 0:
@@ -224,6 +224,7 @@ class NMTLossCompute(LossComputeBase):
             self.criterion = nn.NLLLoss(
                 ignore_index=self.padding_idx, reduction='sum'
             )
+        self.snorm = self_norm
 
     def _make_shard_state(self, batch, output, range_, attns=None):
         return {
@@ -233,17 +234,21 @@ class NMTLossCompute(LossComputeBase):
 
     def _compute_loss(self, batch, output, target):
         bottled_output = self._bottle(output)
+        gscores = self.generator[0](bottled_output)
         if self.sparse:
             # for sparsemax loss, the loss function operates on the raw output
             # vector, not a probability vector. Hence it's only necessary to
             # apply the first part of the generator here.
-            scores = self.generator[0](bottled_output)
+            #scores = self.generator[0](bottled_output)
+            scores = gscores
         else:
-            scores = self.generator(bottled_output)
+            scores = self.generator[1](gscores)
+        logZ = torch.abs((gscores-scores)[:,0])
+        logZsq = torch.pow(logZ,2)
         gtruth = target.view(-1)
 
-        loss = self.criterion(scores, gtruth)
-        stats = self._stats(loss.clone(), scores, gtruth)
+        loss = self.criterion(scores, gtruth) + self.snorm*(logZsq.sum())
+        stats = self._stats(loss.clone(), scores, gtruth, logZ.clone().sum().item(), logZsq.clone().sum().item())
 
         return loss, stats
 
