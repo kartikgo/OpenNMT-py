@@ -72,7 +72,7 @@ class RNNDecoderBase(nn.Module):
 
         # Decoder state
         self.state = {}
-
+        self.state["hidden"]=None
         # Build the RNN.
         self.rnn = self._build_rnn(rnn_type,
                                    input_size=self._input_size,
@@ -149,7 +149,7 @@ class RNNDecoderBase(nn.Module):
         self.state["input_feed"] = self.state["input_feed"].detach()
 
     def forward(self, tgt, memory_bank, memory_lengths=None,
-                step=None):
+                step=None, lm=False):
         """
         Args:
             tgt (`LongTensor`): sequences of padded tokens
@@ -167,7 +167,7 @@ class RNNDecoderBase(nn.Module):
         """
         # Run the forward pass of the RNN.
         dec_state, dec_outs, attns = self._run_forward_pass(
-            tgt, memory_bank, memory_lengths=memory_lengths)
+            tgt, memory_bank, memory_lengths=memory_lengths, lm=lm)
 
         # Update the state with the result.
         output = dec_outs[-1]
@@ -207,7 +207,7 @@ class StdRNNDecoder(RNNDecoderBase):
     or `copy_attn` support.
     """
 
-    def _run_forward_pass(self, tgt, memory_bank, memory_lengths=None):
+    def _run_forward_pass(self, tgt, memory_bank, memory_lengths=None, lm=False):
         """
         Private helper for running the specific RNN forward pass.
         Must be overriden by all subclasses.
@@ -248,23 +248,25 @@ class StdRNNDecoder(RNNDecoderBase):
         # END
 
         # Calculate the attention.
-        dec_outs, p_attn = self.attn(
-            rnn_output.transpose(0, 1).contiguous(),
-            memory_bank.transpose(0, 1),
-            memory_lengths=memory_lengths
-        )
-        attns["std"] = p_attn
-
-        # Calculate the context gate.
-        if self.context_gate is not None:
-            dec_outs = self.context_gate(
-                emb.view(-1, emb.size(2)),
-                rnn_output.view(-1, rnn_output.size(2)),
-                dec_outs.view(-1, dec_outs.size(2))
+        if (lm==False):
+            dec_outs, p_attn = self.attn(
+                rnn_output.transpose(0, 1).contiguous(),
+                memory_bank.transpose(0, 1),
+                memory_lengths=memory_lengths
             )
-            dec_outs = \
-                dec_outs.view(tgt_len, tgt_batch, self.hidden_size)
+            attns["std"] = p_attn
 
+            # Calculate the context gate.
+            if self.context_gate is not None:
+                dec_outs = self.context_gate(   
+                    emb.view(-1, emb.size(2)),
+                    rnn_output.view(-1, rnn_output.size(2)),
+                    dec_outs.view(-1, dec_outs.size(2))
+                )
+                dec_outs = \
+                    dec_outs.view(tgt_len, tgt_batch, self.hidden_size)
+        else:
+            dec_outs = dec_outs.view(tgt_len, tgt_batch, self.hidden_size)
         dec_outs = self.dropout(dec_outs)
         return dec_state, dec_outs, attns
 
@@ -307,11 +309,12 @@ class InputFeedRNNDecoder(RNNDecoderBase):
           G --> H
     """
 
-    def _run_forward_pass(self, tgt, memory_bank, memory_lengths=None):
+    def _run_forward_pass(self, tgt, memory_bank, memory_lengths=None, lm=False ):
         """
         See StdRNNDecoder._run_forward_pass() for description
         of arguments and return values.
         """
+        assert lm==False
         # Additional args check.
         input_feed = self.state["input_feed"].squeeze(0)
         input_feed_batch, _ = input_feed.size()
