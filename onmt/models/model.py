@@ -6,7 +6,8 @@ class LMModel(nn.Module):
     def __init__(self,decoder):
         super(LMModel,self).__init__()
         self.decoder = decoder
-    def forward(self,tgt, dec_state=None):
+        self.encoder=None
+    def forward(self,src, tgt, lengths):
         tgt =tgt[:-1]
         context=None
         context_lengths=None

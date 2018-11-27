@@ -15,5 +15,4 @@ if [ "$4" != "" ]; then
     TRAINSTEPS=$4
 if [ "$5" != "" ]; then
     SNORM=$5
-python train.py -data $DATA -encoder_type brnn -report_every $REP -log_file $LOGS -save_model $SAVE/model  -gpu_ranks 0 -param_init 0.01 -batch_size 256 \
--valid_steps $VALIDSTEPS  -train_steps $TRAINSTEPS -optim adam -learning_rate 0.001 -learning_rate_decay 0.99 -snorm $SNORM
+python train.py -data $DATA -encoder_type brnn -report_every $REP -log_file $LOGS -save_model $SAVE/model  -gpu_ranks 0 -param_init 0.01 -batch_size 256 -valid_steps $VALIDSTEPS  -train_steps $TRAINSTEPS -optim adam -learning_rate 0.001 -learning_rate_decay 0.99 -snorm $SNORM

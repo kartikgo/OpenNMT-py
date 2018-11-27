@@ -102,7 +102,7 @@ def build_decoder(opt, embeddings):
                           opt.global_attention, opt.copy_attn,
                           opt.cnn_kernel_width, opt.dropout,
                           embeddings)
-    elif opt.input_feed:
+    elif (opt.input_feed and not(opt.lm)):
         return InputFeedRNNDecoder(opt.rnn_type, opt.brnn,
                                    opt.dec_layers, opt.dec_rnn_size,
                                    opt.global_attention,
@@ -218,7 +218,7 @@ def build_base_model(model_opt, fields, gpu, checkpoint=None):
     device = torch.device("cuda" if gpu else "cpu")
     model = onmt.models.NMTModel(encoder, decoder)
     if (model_opt.lm==True):
-        model = LMModel(decoder)
+        model = onmt.models.LMModel(decoder)
     # Build Generator.
     if not model_opt.copy_attn:
         if model_opt.generator_function == "sparsemax":

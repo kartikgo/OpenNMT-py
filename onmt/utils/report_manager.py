@@ -142,6 +142,7 @@ class ReportMgr(ReportMgrBase):
         """
         if train_stats is not None:
             self.log('Train perplexity: %g' % train_stats.ppl())
+            self.log('Train xent: %g' % train_stats.xent())
             self.log('Train accuracy: %g' % train_stats.accuracy())
             self.log('Train logZ: %g' % train_stats.get_logZ())
             self.log('Train logZvar: %g' % train_stats.get_logZvar())
@@ -152,6 +153,7 @@ class ReportMgr(ReportMgrBase):
 
         if valid_stats is not None:
             self.log('Validation perplexity: %g' % valid_stats.ppl())
+            self.log('Validation xent: %g' % valid_stats.xent())
             self.log('Validation accuracy: %g' % valid_stats.accuracy())
             self.log('Validation logZ: %g' % valid_stats.get_logZ())
             self.log('Validation logZvar: %g' % valid_stats.get_logZvar())

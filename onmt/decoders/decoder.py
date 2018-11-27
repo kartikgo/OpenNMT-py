@@ -238,7 +238,10 @@ class StdRNNDecoder(RNNDecoderBase):
         if isinstance(self.rnn, nn.GRU):
             rnn_output, dec_state = self.rnn(emb, self.state["hidden"][0])
         else:
-            rnn_output, dec_state = self.rnn(emb, self.state["hidden"])
+            if (lm):
+              rnn_output, dec_state = self.rnn(emb, None)
+            else:
+              rnn_output, dec_state = self.rnn(emb, self.state["hidden"])
 
         # Check
         tgt_len, tgt_batch, _ = tgt.size()
