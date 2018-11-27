@@ -143,7 +143,8 @@ class ReportMgr(ReportMgrBase):
         if train_stats is not None:
             self.log('Train perplexity: %g' % train_stats.ppl())
             self.log('Train accuracy: %g' % train_stats.accuracy())
-
+            self.log('Train logZ: %g' % train_stats.get_logZ())
+            self.log('Train logZvar: %g' % train_stats.get_logZvar())
             self.maybe_log_tensorboard(train_stats,
                                        "train",
                                        lr,
@@ -152,7 +153,8 @@ class ReportMgr(ReportMgrBase):
         if valid_stats is not None:
             self.log('Validation perplexity: %g' % valid_stats.ppl())
             self.log('Validation accuracy: %g' % valid_stats.accuracy())
-
+            self.log('Validation logZ: %g' % valid_stats.get_logZ())
+            self.log('Validation logZvar: %g' % valid_stats.get_logZvar())
             self.maybe_log_tensorboard(valid_stats,
                                        "valid",
                                        lr,

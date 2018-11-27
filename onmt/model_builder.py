@@ -217,7 +217,8 @@ def build_base_model(model_opt, fields, gpu, checkpoint=None):
     # Build NMTModel(= encoder + decoder).
     device = torch.device("cuda" if gpu else "cpu")
     model = onmt.models.NMTModel(encoder, decoder)
-
+    if (model_opt.lm==True):
+        model = LMModel(decoder)
     # Build Generator.
     if not model_opt.copy_attn:
         if model_opt.generator_function == "sparsemax":

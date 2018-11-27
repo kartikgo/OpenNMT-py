@@ -266,6 +266,7 @@ class StdRNNDecoder(RNNDecoderBase):
                 dec_outs = \
                     dec_outs.view(tgt_len, tgt_batch, self.hidden_size)
         else:
+            dec_outs = rnn_output
             dec_outs = dec_outs.view(tgt_len, tgt_batch, self.hidden_size)
         dec_outs = self.dropout(dec_outs)
         return dec_state, dec_outs, attns
