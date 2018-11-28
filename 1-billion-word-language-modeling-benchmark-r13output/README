@@ -1,0 +1,12 @@
+This is the output from the 1-billion-word-language-modeling-benchmark
+
+The home page for this project is
+http://code.google.com/p/1-billion-word-language-modeling-benchmark/
+which links to the code, a paper and a disucsion group.
+
+This output is from revision 13 of the code run with perl v5.16.3.  perl
+v5.14.2 gives the same output.
+
+Tony Robinson (tonyr@cantabResearch.com)
+23 December 2013
+
