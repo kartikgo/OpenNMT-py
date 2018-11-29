@@ -19,8 +19,9 @@ import onmt.decoders.ensemble
 
 
 def build_translator(opt, report_score=True, logger=None, out_file=None):
-    if out_file is None:
-        out_file = codecs.open(opt.output, 'w+', 'utf-8')
+    #if out_file is None:
+    out_file = codecs.open(opt.output, 'w+', 'utf-8')
+    out_score_file = codecs.open(opt.output[:-3]+"_scores.txt",'w+', 'utf-8')
 
     dummy_parser = configargparse.ArgumentParser(description='train.py')
     opts.model_opts(dummy_parser)
@@ -33,7 +34,7 @@ def build_translator(opt, report_score=True, logger=None, out_file=None):
     scorer = onmt.translate.GNMTGlobalScorer(opt)
 
     translator = Translator(model, fields, opt, model_opt,
-                            global_scorer=scorer, out_file=out_file,
+                            global_scorer=scorer, out_file=out_file, out_score_file=out_score_file,
                             report_score=report_score, logger=logger)
 
     return translator
@@ -66,6 +67,7 @@ class Translator(object):
                  model_opt,
                  global_scorer=None,
                  out_file=None,
+                 out_score_file=None,
                  report_score=True,
                  logger=None):
 
@@ -98,6 +100,7 @@ class Translator(object):
 
         self.global_scorer = global_scorer
         self.out_file = out_file
+        self.out_score_file = out_score_file
         self.report_score = report_score
         self.logger = logger
 
@@ -204,6 +207,8 @@ class Translator(object):
                 all_predictions += [n_best_preds]
                 self.out_file.write('\n'.join(n_best_preds) + '\n')
                 self.out_file.flush()
+                self.out_score_file.write('\n'.join([str(a) for a in trans.pred_scores[:self.n_best]]) + '\n')
+                self.out_score_file.flush()
 
                 if self.verbose:
                     sent_number = next(counter)
