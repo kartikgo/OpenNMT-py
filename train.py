@@ -13,6 +13,7 @@ import onmt.utils.distributed
 
 from onmt.utils.logging import logger
 from onmt.train_single import main as single_main
+from onmt.reranker import main as rerank_main
 
 
 def main(opt):
@@ -48,7 +49,8 @@ def main(opt):
             p.join()
 
     elif nb_gpu == 1:  # case 1 GPU only
-        single_main(opt, 0)
+        #single_main(opt, 0)
+        rerank_main(opt, 0)
     else:   # case only CPU
         single_main(opt, -1)
 
@@ -115,6 +117,8 @@ if __name__ == "__main__":
     opts.add_md_help_argument(parser)
     opts.model_opts(parser)
     opts.train_opts(parser)
+    #probably remove this for CE training
+    opts.translate_opts(parser)
 
     opt = parser.parse_args()
     main(opt)
