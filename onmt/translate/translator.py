@@ -21,7 +21,7 @@ import onmt.decoders.ensemble
 def build_translator(opt, report_score=True, logger=None, out_file=None):
     #if out_file is None:
     out_file = codecs.open(opt.output, 'w+', 'utf-8')
-    out_score_file = codecs.open(opt.output[:-3]+"_scores.txt",'w+', 'utf-8')
+    out_score_file = codecs.open(opt.output[:-4]+".scores",'w+', 'utf-8')
 
     dummy_parser = configargparse.ArgumentParser(description='train.py')
     opts.model_opts(dummy_parser)
@@ -205,9 +205,9 @@ class Translator(object):
                 n_best_preds = [" ".join(pred)
                                 for pred in trans.pred_sents[:self.n_best]]
                 all_predictions += [n_best_preds]
-                self.out_file.write('\n'.join(n_best_preds) + '\n')
+                self.out_file.write('\n'.join([" ".join(trans.gold_sent)] + n_best_preds) + '\n')
                 self.out_file.flush()
-                self.out_score_file.write('\n'.join([str(a) for a in trans.pred_scores[:self.n_best]]) + '\n')
+                self.out_score_file.write('\n'.join([str(a.item()) for a in trans.pred_scores[:self.n_best]]) + '\n')
                 self.out_score_file.flush()
 
                 if self.verbose:

@@ -500,6 +500,8 @@ def translate_opts(parser):
     group.add('--src', '-src', required=True,
                        help="""Source sequence to decode (one line per
                        sequence)""")
+    group.add('--scores', '-scores', required=False,
+                       help="""precomputed scores file""")
     group.add('--src_dir', '-src_dir', default="",
               help='Source directory for image or audio files')
     group.add('--tgt', '-tgt',
