@@ -1,0 +1,1 @@
+python translate.py -model testsave/model_step_70000.pt -src ted_data/train.de-en.de -tgt ted_data/train.de-en.en -beam_size 10 -n_best 10 -output 10best_train.out -gpu 0 -batch_size 128 --replace_unk

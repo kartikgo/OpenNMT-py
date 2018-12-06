@@ -112,6 +112,8 @@ def model_opts(parser):
                        state and the first decoder state""")
     group.add('--lm', '-lm', action="store_true",
               help="""Make an lm instead of NMT""")
+    group.add('--glob', '-glob', action="store_true",
+              help="""No normalization""")
     group.add('--rnn_type', '-rnn_type', type=str, default='LSTM',
               choices=['LSTM', 'GRU', 'SRU'],
               action=CheckSRU,
@@ -350,8 +352,8 @@ def train_opts(parser):
 
     # Optimization options
     group = parser.add_argument_group('Optimization- Type')
-    group.add('--batch_size', '-batch_size', type=int, default=64,
-              help='Maximum batch size for training')
+    #group.add('--batch_size', '-batch_size', type=int, default=64,
+    #          help='Maximum batch size for training')
     group.add('--batch_type', '-batch_type', default='sents',
               choices=["sents", "tokens"],
               help="""Batch grouping for batch_size. Standard
@@ -447,8 +449,8 @@ def train_opts(parser):
     group = parser.add_argument_group('Logging')
     group.add('--report_every', '-report_every', type=int, default=50,
               help="Print stats at this interval.")
-    group.add('--log_file', '-log_file', type=str, default="",
-              help="Output logs to a file under this path.")
+    #group.add('--log_file', '-log_file', type=str, default="",
+    #          help="Output logs to a file under this path.")
     group.add('--exp_host', '-exp_host', type=str, default="",
               help="Send logs to this crayon server.")
     group.add('--exp', '-exp', type=str, default="",
@@ -465,7 +467,7 @@ def train_opts(parser):
 
     group = parser.add_argument_group('Speech')
     # Options most relevant to speech
-    group.add('--sample_rate', '-sample_rate', type=int, default=16000,
+    '''group.add('--sample_rate', '-sample_rate', type=int, default=16000,
               help="Sample rate.")
     group.add('--window_size', '-window_size', type=float, default=.02,
               help="Window size for spectrogram in seconds.")
@@ -474,7 +476,7 @@ def train_opts(parser):
     group.add('--image_channel_size', '-image_channel_size',
               type=int, default=3, choices=[3, 1],
               help="""Using grayscale image can training
-                       model faster and smaller""")
+                       model faster and smaller""")'''
 
 
 def translate_opts(parser):
@@ -551,6 +553,8 @@ def translate_opts(parser):
                         (higher = longer generation)""")
     group.add('--beta', '-beta', type=float, default=-0.,
               help="""Coverage penalty parameter""")
+    group.add('--mt_mul', '-mt_mul', type=float, default=3.0,
+              help="""weight on mt scores""")
     group.add('--block_ngram_repeat', '-block_ngram_repeat',
               type=int, default=0,
               help='Block repetition of ngrams during decoding.')
