@@ -522,6 +522,10 @@ def translate_opts(parser):
                        call tools/test_rouge.py on command line""")
     group.add('--nobleu', '-nobleu', action='store_true',
               help="""Don't make the loss bleu sensitive""")
+    group.add('--noext', '-noext', action='store_true',
+              help="""Don't use external scores for the reranker""")
+    group.add('--mtrerank', '-mtrerank', action='store_true',
+              help="""Fine tune MT instead of lm""")
 
     # Options most relevant to summarization.
     group.add('--dynamic_dict', '-dynamic_dict', action='store_true',
