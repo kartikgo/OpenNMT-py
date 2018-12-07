@@ -45,8 +45,8 @@ def _check_save_model_path(opt):
     if not os.path.exists(model_dirname):
         os.makedirs(model_dirname)
 
-def build_reranker(opt, device_id, model, fields,
-                  optim, data_type, model_saver=None):
+def build_reranker(opt, device_id, model, mt_model, fields, mt_fields,
+                  optim, mt_optim, data_type, model_saver=None):
     #train_loss = onmt.utils.loss.build_loss_compute(
     #    model, fields["tgt"].vocab, opt)
     #valid_loss = onmt.utils.loss.build_loss_compute(
@@ -65,21 +65,25 @@ def build_reranker(opt, device_id, model, fields,
     gpu_verbose_level = opt.gpu_verbose_level
     n_hyps = opt.beam_size
     report_manager = onmt.utils.build_report_manager(opt)
-    ranker = Ranker(opt, model, optim, trunc_size,
+    ranker = Ranker(opt, model, mt_model, optim, mt_optim, trunc_size,
                            shard_size, data_type, norm_method,
                            grad_accum_count, n_gpu, gpu_rank,
                            gpu_verbose_level, report_manager,
-                           model_saver=model_saver, n_hyps=n_hyps, padding_idx = fields["tgt"].vocab.stoi[inputters.PAD_WORD])
+                           model_saver=model_saver, n_hyps=n_hyps, 
+                           padding_idx = fields["tgt"].vocab.stoi[inputters.PAD_WORD],
+                           mt_padding_idx = mt_fields["tgt"].vocab.stoi[inputters.PAD_WORD])
     return ranker
 
 class Ranker(object):
-    def __init__(self, opt, model, optim,
+    def __init__(self, opt, model, mt_model, optim, mt_optim,
                  trunc_size=0, shard_size=32, data_type='text',
                  norm_method="sents", grad_accum_count=1, n_gpu=1, gpu_rank=1,
-                 gpu_verbose_level=0, report_manager=None, model_saver=None, n_hyps=5, padding_idx=None):
+                 gpu_verbose_level=0, report_manager=None, model_saver=None, n_hyps=5, padding_idx=None, mt_padding_idx = None):
         # Basic attributes.
         self.model = model
+        self.mt_model = mt_model
         self.optim = optim
+        self.mt_optim = mt_optim
         self.opt = opt
         self.trunc_size = trunc_size
         self.shard_size = shard_size
@@ -93,6 +97,7 @@ class Ranker(object):
         self.model_saver = model_saver
         self.n_hyps = n_hyps
         self.padding_idx = padding_idx
+        self.mt_padding_idx = mt_padding_idx
         self.marginloss = nn.MarginRankingLoss(margin=1,reduction='none')
         assert grad_accum_count > 0
         if grad_accum_count > 1:
@@ -105,6 +110,7 @@ class Ranker(object):
 
         # Set model in training mode.
         self.model.train()
+        self.mt_model.train()
 
     def get_best_hyps(self, data_iter):
         self.model.eval()
@@ -133,7 +139,7 @@ class Ranker(object):
             else:
                 self.report_manager.start_time = start_time
 
-    def train(self, train_iter, valid_iter, train_steps, valid_steps, train_mtscores=None, valid_mtscores=None, glob= False, mt_mul=1.0):
+    def train(self, train_iter, mt_train_iter, valid_iter, mt_valid_iter, train_steps, valid_steps, glob= False, mt_mul=0.0, train_bleu = None):
         logger.info('Start training...')
 
         step = self.optim._step + 1
@@ -143,22 +149,35 @@ class Ranker(object):
         self._start_report_manager(start_time=total_stats.start_time)
         normalization = 0
         step = 0
-        if not(train_mtscores is None):
+        '''if not(train_mtscores is None):
             mtscores = torch.tensor(train_mtscores)
         else:
-            mtscores = None
+            mtscores = None'''
+        if not(train_bleu is None):
+            bleuscores = torch.tensor(train_bleu)
+        else:
+            bleuscores = None
         while (step  < train_steps):
-            for i,batch in enumerate(train_iter):
+            for i,(batch, mt_batch) in enumerate(zip(train_iter, mt_train_iter)):
                 self.model.zero_grad()
+                self.mt_model.zero_grad()
                 src = inputters.make_features(batch, 'src', self.data_type)
                 _, src_lengths = batch.src
                 tgt = inputters.make_features(batch, 'tgt')
                 outputs, attns = self.model(src, tgt, src_lengths) #outputs is len X batch X rnn_size
+                mt_src = inputters.make_features(mt_batch, 'src', self.data_type)
+                _, src_lengths = mt_batch.src
+                mt_tgt = inputters.make_features(mt_batch, 'tgt')
+                mt_outputs, mt_attns = self.mt_model(mt_src, mt_tgt, src_lengths) #outputs is len X batch X rnn_size
                 bsize = outputs.size(1)
-                if not(mtscores is None):
-                    mtscore = mtscores[i*bsize: (i+1)*bsize]
+                #if not(mtscores is None):
+                #    mtscore = mtscores[i*bsize: (i+1)*bsize]
+                #else:
+                #    mtscore = torch.zeros(bsize)
+                if not(bleuscores is None):
+                    bleuscore = bleuscores[i*bsize: (i+1)*bsize]
                 else:
-                    mtscore = torch.zeros(bsize)
+                    bleuscore = torch.zeros(bsize)
                 y = torch.ones(bsize)
                 mask = torch.ones(bsize)
                 ref_inds = torch.tensor(list(xrange(bsize/(self.n_hyps + 1))))
@@ -167,21 +186,30 @@ class Ranker(object):
                     y= y.cuda()
                     ref_inds= ref_inds.cuda()
                     mask = mask.cuda()
-                    mtscore = mtscore.cuda()
+                    #mtscore = mtscore.cuda()
+                    bleuscore = bleuscore.cuda()
                 assert (bsize % (self.n_hyps+1)==0)
                 gtruth = tgt[1:].view(-1)
+                mt_gtruth = mt_tgt[1:].view(-1)
                 wts = (gtruth != self.padding_idx).float()
+                mt_wts = (mt_gtruth != self.mt_padding_idx).float()
                 if (glob):
                     scores = self.model.generator[0](outputs)
+                    mt_scores = self.mt_model.generator[0](mt_outputs)
                 else:
                     scores = self.model.generator(outputs)
-                all_scores  = ((scores.view(-1, scores.size(2)).gather(1, gtruth.unsqueeze(1))).squeeze()*wts).view(-1, bsize).sum(0).squeeze() + mtscore*mt_mul
+                    mt_scores = self.model.generator(mt_outputs)
+                all_lm_scores  = ((scores.view(-1, scores.size(2)).gather(1, gtruth.unsqueeze(1))).squeeze()*wts).view(-1, bsize).sum(0).squeeze()
+                all_mt_scores  = ((mt_scores.view(-1, mt_scores.size(2)).gather(1, mt_gtruth.unsqueeze(1))).squeeze()*mt_wts).view(-1, bsize).sum(0).squeeze()
+                all_scores = all_lm_scores + mt_mul*all_mt_scores
                 refs = torch.index_select(all_scores, 0, ref_inds).unsqueeze(1).expand(ref_inds.size(0), self.n_hyps + 1).contiguous().view(-1)        
                 assert refs.size()==all_scores.size()
-                loss = mask*self.marginloss(refs, all_scores, y)
+                loss = (1.0 - bleuscore)*100*(mask*self.marginloss(refs, all_scores, y))
+                #loss = loss.div(bleuscore+1e-10)
                 normalization = batch.batch_size/(self.n_hyps + 1)
                 (loss.sum()).div(float(normalization)).backward()
                 self.optim.step()
+                self.mt_optim.step()
                 batch_stats = onmt.utils.Statistics(loss.sum().item(), float(normalization), 0, 0.0, 0.0)
                 report_stats.update(batch_stats)
                 total_stats.update(batch_stats)
@@ -196,7 +224,7 @@ class Ranker(object):
                         logger.info('GpuRank %d: validate step %d'
                                     % (self.gpu_rank, step))
                     #valid_iter = valid_iter_fct()
-                    valid_stats = self.validate(valid_iter, valid_mtscores, glob)
+                    valid_stats = self.validate(valid_iter, mt_valid_iter, glob, mt_mul)
                     if self.gpu_verbose_level > 0:
                         logger.info('GpuRank %d: gather valid stat \
                                     step %d' % (self.gpu_rank, step))
@@ -212,28 +240,33 @@ class Ranker(object):
                 logger.info('GpuRank %d: we completed an epoch \
                             at step %d' % (self.gpu_rank, step))
                         
-    def validate(self, valid_iter, valid_mtscores=None, glob= False, mul =1.0):
+    def validate(self, valid_iter, mt_valid_iter, glob= False, mul =1.0):
         self.model.eval() 
+        self.mt_model.eval() 
         #self.model.generator.eval() 
         losses =[]
         stats = onmt.utils.Statistics()
-        if not(valid_mtscores is None):
-            mtscores = torch.tensor(valid_mtscores)
-        else:
-            mtscores = None
+        #if not(valid_mtscores is None):
+        #    mtscores = torch.tensor(valid_mtscores)
+        #else:
+        #    mtscores = None
         #if (self.gpu_rank==0):
         #    if not(valid_mtscores is None):
         #        mtscores = mtscores.cuda()
-        for i,batch in enumerate(valid_iter):
+        for i,(batch, mt_batch) in enumerate(zip(valid_iter, mt_valid_iter)):
             src = inputters.make_features(batch, 'src', self.data_type)
             _, src_lengths = batch.src
             tgt = inputters.make_features(batch, 'tgt')
             outputs, attns = self.model(src, tgt, src_lengths) #outputs is len X batch X rnn_size
+            mt_src = inputters.make_features(mt_batch, 'src', self.data_type)
+            _, src_lengths = mt_batch.src
+            mt_tgt = inputters.make_features(mt_batch, 'tgt')
+            mt_outputs, mt_attns = self.mt_model(mt_src, mt_tgt, src_lengths) #outputs is len X batch X rnn_size
             bsize = outputs.size(1)
-            if not(mtscores is None):
-                mtscore = mtscores[i*bsize: (i+1)*bsize]
-            else:
-                mtscore = torch.zeros(bsize)
+            #if not(mtscores is None):
+            #    mtscore = mtscores[i*bsize: (i+1)*bsize]
+            #else:
+            #    mtscore = torch.zeros(bsize)
             assert (bsize % (self.n_hyps+1)==0)
             y = torch.ones(bsize)
             mask = torch.ones(bsize)
@@ -243,14 +276,20 @@ class Ranker(object):
                 y= y.cuda()
                 ref_inds= ref_inds.cuda()
                 mask = mask.cuda()
-                mtscore = mtscore.cuda()
+            #    mtscore = mtscore.cuda()
             gtruth = tgt[1:].view(-1)
             wts = (gtruth != self.padding_idx).float()
+            mt_gtruth = mt_tgt[1:].view(-1)
+            mt_wts = (mt_gtruth != self.mt_padding_idx).float()
             if (glob):
                 scores = self.model.generator[0](outputs)
+                mt_scores = self.mt_model.generator[0](mt_outputs)
             else:
                 scores = self.model.generator(outputs)
-            all_scores  = ((scores.view(-1, scores.size(2)).gather(1, gtruth.unsqueeze(1))).squeeze()*wts).view(-1, bsize).sum(0).squeeze() + mul*mtscore
+                mt_scores = self.model.generator(mt_outputs)
+            all_lm_scores  = ((scores.view(-1, scores.size(2)).gather(1, gtruth.unsqueeze(1))).squeeze()*wts).view(-1, bsize).sum(0).squeeze()
+            all_mt_scores  = ((mt_scores.view(-1, mt_scores.size(2)).gather(1, mt_gtruth.unsqueeze(1))).squeeze()*mt_wts).view(-1, bsize).sum(0).squeeze()
+            all_scores= all_lm_scores + mul*all_mt_scores
             refs = torch.index_select(all_scores, 0, ref_inds).unsqueeze(1).expand(ref_inds.size(0), self.n_hyps + 1).contiguous().view(-1)        
             assert refs.size()==all_scores.size()
             loss = mask*self.marginloss(refs, all_scores, y)
@@ -261,7 +300,7 @@ class Ranker(object):
         lmscores = torch.tensor(losses)
         if (self.gpu_rank==0):
             lmscores = lmscores.cuda()
-        selected = self.combine_rank(mtscores)
+        selected = self.combine_rank(lmscores)
         f = open(self.opt.tgt+".valid",'r').readlines()
         cands=[]
         for ind in selected:
@@ -274,6 +313,7 @@ class Ranker(object):
         logger.info(msg)
         outf.close()
         self.model.train()
+        self.mt_model.train()
         valid_stats = self._maybe_gather_stats(stats)
         self._report_step(self.optim.learning_rate,
                           1, valid_stats=valid_stats)
@@ -426,37 +466,50 @@ def main(opt, device_id):
     opt = training_opt_postprocessing(opt, device_id)
     init_logger(opt.log_file)
     # Load checkpoint if we resume from a previous training.
-    if opt.train_from:
-        logger.info('Loading checkpoint from %s' % opt.train_from)
-        checkpoint = torch.load(opt.train_from,
-                                map_location=lambda storage, loc: storage)
-        fields = inputters.load_fields_from_vocab(
-            checkpoint['vocab'], data_type=opt.data_type)
+    #if opt.train_from:
+    logger.info('Loading checkpoint from %s' % opt.train_from)
+    checkpoint = torch.load(opt.train_from,
+                            map_location=lambda storage, loc: storage)
+    fields = inputters.load_fields_from_vocab(
+        checkpoint['vocab'], data_type=opt.data_type)
+    #mt_checkpoint = torch.load('testsave/mt_snorm_step_92000.pt', map_location=lambda storage, loc: storage)
+    mt_checkpoint = torch.load(opt.models[0], map_location=lambda storage, loc: storage)
+    mt_fields = inputters.load_fields_from_vocab(
+        mt_checkpoint['vocab'], data_type=opt.data_type)
 
-        # Load default opts values then overwrite it with opts from
-        # the checkpoint. It's useful in order to re-train a model
-        # after adding a new option (not set in checkpoint)
-        dummy_parser = configargparse.ArgumentParser()
-        opts.model_opts(dummy_parser)
-        default_opt = dummy_parser.parse_known_args([])[0]
+    # Load default opts values then overwrite it with opts from
+    # the checkpoint. It's useful in order to re-train a model
+    # after adding a new option (not set in checkpoint)
+    dummy_parser = configargparse.ArgumentParser()
+    opts.model_opts(dummy_parser)
+    default_opt = dummy_parser.parse_known_args([])[0]
 
-        model_opt = default_opt
-        model_opt.__dict__.update(checkpoint['opt'].__dict__)
-    else:
-        checkpoint = None
-        model_opt = opt
+    model_opt = default_opt
+    model_opt.__dict__.update(checkpoint['opt'].__dict__)
+    mt_model_opt = default_opt
+    mt_model_opt.__dict__.update(mt_checkpoint['opt'].__dict__)
+    #else:
+    #    checkpoint = None
+    #    model_opt = opt
     # Build model.
     model = build_model(model_opt, opt, fields, checkpoint)
+    mt_model = build_model(mt_model_opt, opt, mt_fields, mt_checkpoint)
     n_params, enc, dec = _tally_parameters(model)
+    logger.info('encoder: %d' % enc)
+    logger.info('decoder: %d' % dec)
+    logger.info('* number of parameters: %d' % n_params)
+    _check_save_model_path(opt)
+    n_params, enc, dec = _tally_parameters(mt_model)
     logger.info('encoder: %d' % enc)
     logger.info('decoder: %d' % dec)
     logger.info('* number of parameters: %d' % n_params)
     _check_save_model_path(opt)
     # Build optimizer.
     optim = build_optim(model, opt, checkpoint)
+    mt_optim = build_optim(mt_model, opt, mt_checkpoint)
     # Build model saver
-    model_saver = build_model_saver(model_opt, opt, model, fields, optim)
-
+    #model_saver = build_model_saver(model_opt, opt, model, fields, optim)
+    model_saver= None
     src_features, tgt_features = _collect_report_features(fields)
     for j, feat in enumerate(src_features):
         logger.info(' * src feature %d size = %d'
@@ -483,6 +536,20 @@ def main(opt, device_id):
                       window=opt.window,
                       use_filter_pred=False,
                       image_channel_size=opt.image_channel_size)
+    mt_data = inputters. \
+        build_dataset(mt_fields,
+                      opt.data_type,
+                      src_path=opt.mt_src+'.valid',
+                      src_data_iter=None,
+                      tgt_path=opt.tgt+'.valid',
+                      tgt_data_iter=None,
+                      src_dir=None,
+                      sample_rate=opt.sample_rate,
+                      window_size=opt.window_size,
+                      window_stride=opt.window_stride,
+                      window=opt.window,
+                      use_filter_pred=False,
+                      image_channel_size=opt.image_channel_size)
     '''data = inputters. \
         build_dataset(fields,
                       opt.data_type,
@@ -491,6 +558,10 @@ def main(opt, device_id):
                       src_dir = opt.src_dir)'''
     valid_iter = inputters.OrderedIterator(
         dataset=data, device=cur_device,
+        batch_size=opt.batch_size,
+        train=False,shuffle=False, sort=False, sort_within_batch=True)
+    mt_valid_iter = inputters.OrderedIterator(
+        dataset=mt_data, device=cur_device,
         batch_size=opt.batch_size,
         train=False,shuffle=False, sort=False, sort_within_batch=True)
     data = inputters. \
@@ -507,24 +578,51 @@ def main(opt, device_id):
                       window=opt.window,
                       use_filter_pred=False,
                       image_channel_size=opt.image_channel_size)
+    mt_data = inputters. \
+        build_dataset(mt_fields,
+                      opt.data_type,
+                      src_path=opt.mt_src+'.train',
+                      src_data_iter=None,
+                      tgt_path=opt.tgt+'.train',
+                      tgt_data_iter=None,
+                      src_dir=None,
+                      sample_rate=opt.sample_rate,
+                      window_size=opt.window_size,
+                      window_stride=opt.window_stride,
+                      window=opt.window,
+                      use_filter_pred=False,
+                      image_channel_size=opt.image_channel_size)
     train_iter = inputters.OrderedIterator(
         dataset=data, device=cur_device,
         batch_size=opt.batch_size,
         train=False,shuffle=False, sort=False, sort_within_batch=True)
+    mt_train_iter = inputters.OrderedIterator(
+        dataset=mt_data, device=cur_device,
+        batch_size=opt.batch_size,
+        train=False,shuffle=False, sort=False, sort_within_batch=True)
     btchs = 0
-    ranker = build_reranker(opt, device_id, model, fields, optim, opt.data_type, model_saver=model_saver)
+    ranker = build_reranker(opt, device_id, model, mt_model, fields, mt_fields, optim, mt_optim, opt.data_type, model_saver=model_saver)
     train_mtscore_list=[]
     valid_mtscore_list=[]
+    bleu_list = []
     #selected = ranker.get_best_hyps(data_iter)
     #print(inds)
+    f = open("10best_nounk.bleu.train","r")
+    for line in f:
+      bleu_list.append(float(line.strip().split()[0]))
+    f.close()
     f = open(opt.scores+".train","r")
     for line in f:
       train_mtscore_list.append(float(line.strip().split()[0]))
+    f.close()
     f = open(opt.scores+".valid","r")
     for line in f:
       valid_mtscore_list.append(float(line.strip().split()[0]))
+    f.close()
+    if (opt.nobleu):
+        bleu_list = None
     #stats = ranker.validate(data_iter, mtscore_list, glob= opt.glob, mul = opt.mt_mul)
-    ranker.train(train_iter, valid_iter, opt.train_steps, opt.valid_steps, train_mtscore_list, valid_mtscore_list, glob= opt.glob, mt_mul = opt.mt_mul)
+    ranker.train(train_iter, mt_train_iter, valid_iter, mt_valid_iter, opt.train_steps, opt.valid_steps, glob= opt.glob, mt_mul = opt.mt_mul, train_bleu = bleu_list)
     '''mtscores = torch.cuda.FloatTensor(mtscore_list)
     lmscore_list = ranker.get_scores(data_iter, glob= opt.glob)
     lmscores = torch.cuda.FloatTensor(lmscore_list)
