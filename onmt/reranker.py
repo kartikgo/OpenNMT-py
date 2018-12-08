@@ -142,7 +142,15 @@ class Ranker(object):
         y = torch.ones(bsize)
         if(self.gpu_rank==0):
             y = y.cuda()
-        return (1.0 - bleuscores)*(mask*self.marginloss(refs, modelscores, y))
+        #if (liang_margin):
+        weighted_ref_loss =(1.0 - bleuscores)*(mask*self.marginloss(refs, modelscores, y))
+        bleuscores = mask*bleuscores
+        best_bl,inds = torch.topk(bleuscores.view(-1,self.n_hyps+1),1)
+        diff_bleu = (best_bl - bleuscores.view(-1, self.n_hyps+1)).view(-1)
+        cand_loss = mask*diff_bleu*torch.nn.functional.relu(diff_bleu*10 +  modelscores.view(-1, self.n_hyps + 1) - modelscores.view(-1, self.n_hyps+1).gather(1, inds)).view(-1).contiguous()
+        #print(refs.tolist(), modelscores.tolist(), bleuscores.tolist(), weighted_ref_loss.tolist(), cand_loss.tolist())
+        return (cand_loss + weighted_ref_loss)
+        #elif ()
 
     def train(self, train_iter, valid_iter, train_steps, valid_steps, train_ext_score = None, valid_ext_score = None, glob= False, mul=0.0, train_bleu = None):
         logger.info('Start training...')
@@ -163,6 +171,7 @@ class Ranker(object):
         else:
             bleuscores = None
         while (step  < train_steps):
+            st=0
             for i,batch in enumerate(train_iter):
                 self.model.zero_grad()
                 src = inputters.make_features(batch, 'src', self.data_type)
@@ -170,16 +179,20 @@ class Ranker(object):
                 tgt = inputters.make_features(batch, 'tgt')
                 outputs, attns = self.model(src, tgt, src_lengths) #outputs is len X batch X rnn_size
                 bsize = outputs.size(1)
+                #print(bsize)
                 if not(extscores is None):
-                    extscore = extscores[i*bsize: (i+1)*bsize]
+                    #extscore = extscores[i*bsize: (i+1)*bsize]
+                    extscore = extscores[st: st + bsize]
                 else:
                     extscore = torch.zeros(bsize)
                 if not(bleuscores is None):
-                    bleuscore = bleuscores[i*bsize: (i+1)*bsize]
+                    #bleuscore = bleuscores[i*bsize: (i+1)*bsize]
+                    bleuscore = bleuscores[st: st+bsize]
                 else:
                     bleuscore = torch.zeros(bsize)
+                st = st+bsize
                 mask = torch.ones(bsize)
-                ref_inds = torch.tensor(list(xrange(bsize/(self.n_hyps + 1))))
+                ref_inds = (self.n_hyps+1)*torch.tensor(list(range(int(bsize/(self.n_hyps + 1)))))
                 mask[ref_inds] = 0.0
                 if (self.gpu_rank==0):
                     ref_inds= ref_inds.cuda()
@@ -189,18 +202,20 @@ class Ranker(object):
                 assert (bsize % (self.n_hyps+1)==0)
                 gtruth = tgt[1:].view(-1)
                 wts = (gtruth != self.padding_idx).float()
+                lgts = wts.view(-1, bsize).sum(0)
                 if (glob):
                     scores = self.model.generator[0](outputs)
                 else:
                     scores = self.model.generator(outputs)
                 all_scores  = ((scores.view(-1, scores.size(2)).gather(1, gtruth.unsqueeze(1))).squeeze()*wts).view(-1, bsize).sum(0).squeeze()
-                all_scores = all_scores + mul*extscore
+                #print(all_scores.tolist(), extscore.tolist())
+                all_scores = (all_scores + mul*extscore).div(lgts)
                 refs = torch.index_select(all_scores, 0, ref_inds).unsqueeze(1).expand(ref_inds.size(0), self.n_hyps + 1).contiguous().view(-1)        
                 assert refs.size()==all_scores.size()
                 #loss = (1.0 - bleuscore)*(mask*self.marginloss(refs, all_scores, y))
                 loss = self._compute_loss(refs, all_scores, bleuscore, mask)
                 #loss = loss.div(bleuscore+1e-10)
-                normalization = batch.batch_size/(self.n_hyps + 1)
+                normalization = batch.batch_size#/(self.n_hyps + 1)
                 (loss.sum()).div(float(normalization)).backward()
                 self.optim.step()
                 batch_stats = onmt.utils.Statistics(loss.sum().item(), float(normalization), 0, 0.0, 0.0)
@@ -252,6 +267,7 @@ class Ranker(object):
             extscores = torch.tensor(valid_ext_score)
         else:
             extscores = None
+        st = 0
         for i,batch in enumerate(valid_iter):
             if (train and (i> 100)):
                 break
@@ -261,12 +277,15 @@ class Ranker(object):
             outputs, attns = self.model(src, tgt, src_lengths) #outputs is len X batch X rnn_size
             bsize = outputs.size(1)
             if not(extscores is None):
-                extscore = extscores[i*bsize: (i+1)*bsize]
+                #extscore = extscores[i*bsize: (i+1)*bsize]
+                extscore = extscores[st: st+bsize]
             else:
                 extscore = torch.zeros(bsize)
+            st = st+bsize
             assert (bsize % (self.n_hyps+1)==0)
             mask = torch.ones(bsize)
-            ref_inds = torch.tensor(list(xrange(bsize/(self.n_hyps + 1))))
+            #ref_inds = torch.tensor(list(range(int(bsize/(self.n_hyps + 1)))))
+            ref_inds = (self.n_hyps+1)*torch.tensor(list(range(int(bsize/(self.n_hyps + 1)))))
             mask[ref_inds] = 0.0
             if (self.gpu_rank==0):
                 ref_inds= ref_inds.cuda()
@@ -274,12 +293,13 @@ class Ranker(object):
                 extscore = extscore.cuda()
             gtruth = tgt[1:].view(-1)
             wts = (gtruth != self.padding_idx).float()
+            lgts = wts.view(-1, bsize).sum(0)
             if (glob):
                 scores = self.model.generator[0](outputs)
             else:
                 scores = self.model.generator(outputs)
             all_scores  = ((scores.view(-1, scores.size(2)).gather(1, gtruth.unsqueeze(1))).squeeze()*wts).view(-1, bsize).sum(0).squeeze()
-            all_scores= all_scores + mul*extscore
+            all_scores= all_scores.div(lgts) + mul*extscore
             refs = torch.index_select(all_scores, 0, ref_inds).unsqueeze(1).expand(ref_inds.size(0), self.n_hyps + 1).contiguous().view(-1)        
             assert refs.size()==all_scores.size()
             #loss = mask*self.marginloss(refs, all_scores, y)
@@ -516,7 +536,7 @@ def main(opt, device_id):
         valid_iter = inputters.OrderedIterator(
             dataset=data, device=cur_device,
             batch_size=opt.batch_size,
-            train=False,shuffle=False, sort=False, sort_within_batch=True)
+            train=False,shuffle=False, sort=False, sort_within_batch=False)
         data = inputters. \
             build_dataset(fields,
                           opt.data_type,
@@ -534,7 +554,7 @@ def main(opt, device_id):
         train_iter = inputters.OrderedIterator(
             dataset=data, device=cur_device,
             batch_size=opt.batch_size,
-            train=False,shuffle=False, sort=False, sort_within_batch=True)
+            train=False,shuffle=False, sort=False, sort_within_batch=False)
     else:
         data = inputters. \
             build_dataset(fields,
@@ -553,7 +573,7 @@ def main(opt, device_id):
         valid_iter = inputters.OrderedIterator(
             dataset=data, device=cur_device,
             batch_size=opt.batch_size,
-            train=False,shuffle=False, sort=False, sort_within_batch=True)
+            train=False,shuffle=False, sort=False, sort_within_batch=False)
         data = inputters. \
             build_dataset(fields,
                           opt.data_type,
@@ -571,7 +591,7 @@ def main(opt, device_id):
         train_iter = inputters.OrderedIterator(
             dataset=data, device=cur_device,
             batch_size=opt.batch_size,
-            train=False,shuffle=False, sort=False, sort_within_batch=True)
+            train=False,shuffle=False, sort=False, sort_within_batch=False)
     btchs = 0
     ranker = build_reranker(opt, device_id, model, fields, optim, opt.data_type, model_saver=model_saver)
     train_extscore_list=[]
